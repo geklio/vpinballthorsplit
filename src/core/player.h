@@ -259,6 +259,7 @@ public:
 public:
    //VPX::RenderOutput& GetOutput(VPXWindowId window);
    VPX::Window* m_playfieldWnd = nullptr;
+   VPX::Window* m_spanWnd = nullptr; // Lower display of a spanned playfield (Android secondary display), see SpanLayout
    VPX::RenderOutput m_backglassOutput;
    VPX::RenderOutput m_scoreViewOutput;
    VPX::RenderOutput m_topperOutput;

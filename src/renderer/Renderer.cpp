@@ -43,7 +43,7 @@ extern marker_series series;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D)
+Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D, VPX::Window* spanWnd)
    : m_sceneLighting(table) 
    , m_stereo3D(stereo3D)
    , m_table(table)
@@ -107,6 +107,29 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       // Default renders at the output window pixel resolution
       m_renderWidth = wnd->GetPixelWidth();
       m_renderHeight = wnd->GetPixelHeight();
+
+      // Spanned playfield: render on a tall canvas covering both displays and the gap between them
+      if (spanWnd && m_table->GetSettings().GetPlayer_SpanPlayfield())
+      {
+         const Settings& settings = m_table->GetSettings();
+         m_spanLayout = SpanLayout::Compute(wnd->GetPixelWidth(), wnd->GetPixelHeight(), spanWnd->GetPixelWidth(), spanWnd->GetPixelHeight(),
+            settings.GetPlayer_SpanTopPPI(), settings.GetPlayer_SpanBottomPPI(), settings.GetPlayer_SpanGapMM(),
+            settings.GetPlayer_SpanTopOffsetX(), settings.GetPlayer_SpanBottomOffsetX());
+         if (m_spanLayout.valid)
+         {
+            m_spanWnd = spanWnd;
+            m_renderWidth = m_spanLayout.canvasWidth;
+            m_renderHeight = m_spanLayout.canvasHeight;
+            PLOGI << std::format("Spanned playfield: canvas {}x{} (gap {} rows), top {}x{} -> column {} px at x={}, bottom {}x{} -> column {} px at x={}",
+               m_spanLayout.canvasWidth, m_spanLayout.canvasHeight, m_spanLayout.gapHeight,
+               wnd->GetPixelWidth(), wnd->GetPixelHeight(), m_spanLayout.topDst.w, m_spanLayout.topDst.x,
+               spanWnd->GetPixelWidth(), spanWnd->GetPixelHeight(), m_spanLayout.bottomDst.w, m_spanLayout.bottomDst.x);
+         }
+         else
+         {
+            PLOGE << "Spanned playfield: invalid layout settings, rendering on the main display only";
+         }
+      }
    }
    const float AAfactor = m_table->GetSettings().GetPlayer_AAFactor();
    const int renderWidthAA = (int)((float)m_renderWidth * AAfactor);
@@ -119,6 +142,13 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       DrawSegmentDisplay, // Draw a segment display element (just one digit, using max blending to allow building a complete display) // -> ctx->DrawSegDisplay
       &m_ancillaryRenderSetup // Custom rendering data
    };
+
+   if (m_spanWnd && m_renderDevice->GetOutputBackBuffer())
+   {
+      const colorFormat spanFormat = m_renderDevice->GetOutputBackBuffer()->GetColorFormat() == colorFormat::RGBA10 ? colorFormat::RGBA10 : colorFormat::RGBA8;
+      m_spanRT = new RenderTarget(m_renderDevice, SurfaceType::RT_DEFAULT, "SpanCanvas"s, m_spanLayout.canvasWidth, m_spanLayout.canvasHeight, spanFormat, false, 1,
+         "Fatal Error: unable to create the spanned playfield canvas");
+   }
 
    if (m_renderDevice->GetOutputBackBuffer() && (m_renderDevice->GetOutputBackBuffer()->GetColorFormat() == colorFormat::RGBA10) && (m_FXAA == Quality_SMAA || m_FXAA == Standard_DLAA))
       ShowError("SMAA or DLAA post-processing AA should not be combined with 10bit-output rendering (will result in visible artifacts)!");
@@ -394,6 +424,7 @@ Renderer::~Renderer()
    delete m_pBloomTmpBufferTexture;
    delete m_pPostProcessRenderTarget1;
    delete m_pPostProcessRenderTarget2;
+   delete m_spanRT;
    delete m_pReflectionBufferTexture;
    delete m_pMotionBlurBufferTexture;
    delete m_pOffscreenVRLeft;
@@ -2090,7 +2121,7 @@ void Renderer::RenderDynamics()
 
 void Renderer::SetScreenOffset(const float x, const float y)
 {
-   const float rotation = m_stereo3D == STEREO_VR ? 0.f : ANGTORAD(m_table->GetViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight()));
+   const float rotation = m_stereo3D == STEREO_VR ? 0.f : ANGTORAD(m_table->GetViewSetup().GetRotation(m_stereo3D, GetFinalRT()->GetWidth(), GetFinalRT()->GetHeight()));
    const float c = cosf(-rotation), s = sinf(-rotation);
    m_screenOffset.x = x * c - y * s;
    m_screenOffset.y = x * s + y * c;
@@ -2203,7 +2234,7 @@ RenderTarget* Renderer::ApplyAdditiveScreenSpaceReflection(RenderTarget* rendere
    m_renderDevice->m_FBShader->SetTexture(ShaderUniform::tex_ao_dither, m_aoDitherSampler);
    // FIXME check if size should not be taken from renderdevice to account for stereo (double width/height) or supersampling
    m_renderDevice->m_FBShader->SetVector(ShaderUniform::w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), 1.0f /*radical_inverse(m_overall_frames%2048)*/, 1.0f);
-   const float rotation = m_table->GetViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight());
+   const float rotation = m_table->GetViewSetup().GetRotation(m_stereo3D, GetFinalRT()->GetWidth(), GetFinalRT()->GetHeight());
    m_renderDevice->m_FBShader->SetVector(ShaderUniform::SSR_bumpHeight_fresnelRefl_scale_FS, 0.3f, 0.3f, m_table->m_SSRScale, rotation);
    m_renderDevice->m_FBShader->SetTechnique(ShaderTechnique::SSReflection);
    m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
@@ -2901,6 +2932,49 @@ RenderTarget* Renderer::ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* o
    return outputRT;
 }
 
+void Renderer::ApplySpan(RenderTarget* canvasRT)
+{
+   m_renderDevice->ResetRenderState();
+   m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+   m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+   m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+   m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
+
+   // Copy one canvas slice to one display, scaled with bilinear filtering. Same conventions as the fullscreen
+   // quad: clip space Y up (+1 is the top row), texture V down (0 is the top row), rects have a top-left origin
+   const auto drawSlice = [this, canvasRT](const string& passName, RenderTarget* dest, const SpanRect& src, const SpanRect& dst)
+   {
+      if (dest == nullptr) // Secondary swapchain unavailable (e.g. being recreated), skip this display
+         return;
+      m_renderDevice->SetRenderTarget(passName, dest, false);
+      m_renderDevice->Clear(clearType::TARGET, 0x00000000);
+      m_renderDevice->AddRenderTargetDependency(canvasRT);
+      const float dw = static_cast<float>(dest->GetWidth()), dh = static_cast<float>(dest->GetHeight());
+      const float cw = static_cast<float>(canvasRT->GetWidth()), ch = static_cast<float>(canvasRT->GetHeight());
+      const float x1 = 2.f * static_cast<float>(dst.x) / dw - 1.f;
+      const float x2 = 2.f * static_cast<float>(dst.x + dst.w) / dw - 1.f;
+      const float y1 = 1.f - 2.f * static_cast<float>(dst.y) / dh;
+      const float y2 = 1.f - 2.f * static_cast<float>(dst.y + dst.h) / dh;
+      const float u1 = static_cast<float>(src.x) / cw;
+      const float u2 = static_cast<float>(src.x + src.w) / cw;
+      const float v1 = static_cast<float>(src.y) / ch;
+      const float v2 = static_cast<float>(src.y + src.h) / ch;
+      const Vertex3D_TexelOnly verts[4] = {
+         { x2, y1, 0.f, u2, v1 },
+         { x1, y1, 0.f, u1, v1 },
+         { x2, y2, 0.f, u2, v2 },
+         { x1, y2, 0.f, u1, v2 },
+      };
+      m_renderDevice->m_FBShader->SetTexture(ShaderUniform::tex_fb_filtered, canvasRT->GetColorSampler());
+      m_renderDevice->m_FBShader->SetTechnique(ShaderTechnique::fb_copy);
+      m_renderDevice->DrawTexturedQuad(m_renderDevice->m_FBShader, verts);
+   };
+
+   drawSlice("Span Top"s, m_renderDevice->GetOutputBackBuffer(), m_spanLayout.topSrc, m_spanLayout.topDst);
+   if (m_spanWnd)
+      drawSlice("Span Bottom"s, m_spanWnd->GetBackBuffer(), m_spanLayout.bottomSrc, m_spanLayout.bottomDst);
+}
+
 RenderTarget* Renderer::ApplyStereo(RenderTarget* renderedRT, RenderTarget* outputBackBuffer)
 {
    // Always applied as the last pass
@@ -3242,19 +3316,19 @@ void Renderer::Render3DScene()
 
    // Perform color grade LUT / dither / tonemapping, also applying bloom and AO
    RenderTarget* const tonemapRT
-      = ApplyTonemapping(renderedRT, (hasAntialiasPass || hasSharpenPass || hasStereoPass || hasUpscalerPass) ? GetPostProcessRenderTarget1() : m_renderDevice->GetOutputBackBuffer());
+      = ApplyTonemapping(renderedRT, (hasAntialiasPass || hasSharpenPass || hasStereoPass || hasUpscalerPass) ? GetPostProcessRenderTarget1() : GetFinalRT());
 
    // Raytraced ball motion blur (BGFX only)
    renderedRT = ApplyBallMotionBlur(renderedRT, tonemapRT);
 
    // Perform post processed anti aliasing
-   renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass) ? nullptr : GetFinalRT());
 
    // Performs sharpening
-   renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass) ? nullptr : GetFinalRT());
 
    // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
-   renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : GetFinalRT());
 
    // If using OpenVR, render LiveUI before pushing eyes to headset
    // If using 3D TV stereo mode, render LiveUI before stereo as it must be duplicated per view to be correct
@@ -3284,7 +3358,15 @@ void Renderer::Render3DScene()
    }
 
    // Apply stereo
-   renderedRT = ApplyStereo(renderedRT, m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplyStereo(renderedRT, GetFinalRT());
+
+   // Spanned playfield: slice the canvas to both displays. The UI is then drawn on the main display only, at its native size
+   if (m_spanRT)
+   {
+      assert(renderedRT == m_spanRT);
+      ApplySpan(renderedRT);
+      renderedRT = m_renderDevice->GetOutputBackBuffer();
+   }
 
    if (!uiBeforeStero && xrUILayer == nullptr)
    {

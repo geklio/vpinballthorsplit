@@ -159,6 +159,15 @@ PropEnum(Player, CabinetAutofitMode, "Cabinet Autofit Mode"s, "Select between ma
    "Manual"s, "Fit Table"s, "Fit Screen"s);
 PropFloat(Player, CabinetAutofitPos, "Cabinet Autofit Pos"s, "Relative lower flipper bat position when using automatic view fitting (0% for bottom of screen, 100% for top)"s, 0.f, 0.2f, 0.05f);
 
+// Span the playfield over two stacked displays (Android secondary display, e.g. AYN Thor).
+// The scene is rendered once on a tall virtual canvas, then sliced so the table looks continuous across the hinge.
+PropBool(Player, SpanPlayfield, "Span Playfield"s, "Render the playfield across the main display and a secondary display stacked below it, as one continuous image"s, false);
+PropFloat(Player, SpanGapMM, "Span Gap (mm)"s, "Physical gap between the bottom edge of the top display active area and the top edge of the bottom display active area. Measure it on the device"s, 0.f, 100.f, 10.f);
+PropFloat(Player, SpanTopPPI, "Span Top PPI"s, "Pixel density of the top (main) display, in pixels per inch"s, 50.f, 1000.f, 367.f);
+PropFloat(Player, SpanBottomPPI, "Span Bottom PPI"s, "Pixel density of the bottom (secondary) display, in pixels per inch"s, 50.f, 1000.f, 419.5f);
+PropInt(Player, SpanTopOffsetX, "Span Top Offset X"s, "Horizontal shift, in pixels, of the playfield column on the top display, to line it up with the bottom display"s, -2000, 2000, 0);
+PropInt(Player, SpanBottomOffsetX, "Span Bottom Offset X"s, "Horizontal shift, in pixels, of the playfield column on the bottom display"s, -2000, 2000, 0);
+
 // Aliasing & sharpening
 PropFloat(Player, AAFactor, "Full Scene Anti Aliasing"s,
    "Enables brute-force Up/Downsampling (similar to DSR).\nThis delivers very good quality but has a significant impact on performance.\n200% means twice the resolution to be handled while rendering"s,

@@ -20,13 +20,14 @@ import kotlinx.coroutines.withTimeoutOrNull
  * as an "external surface" for one ancillary window. The native renderer then creates a second BGFX swapchain on it.
  *
  * Which window is routed is read from VPinballX.ini:
- *  - [Backglass] BackglassOutput = 1 (Floating)  -> backglass goes to the second screen
+ *  - [Player] SpanPlayfield = 1 -> the playfield spans both screens as one continuous image (see SpanLayout.h)
+ *  - else [Backglass] BackglassOutput = 1 (Floating)  -> backglass goes to the second screen
  *  - else [ScoreView] ScoreViewOutput = 1 (Floating) -> score view (DMD) goes to the second screen
  *  - else nothing is routed and the player behaves as stock.
  */
 class SecondScreenPresenter(private val context: Context) {
     private var presentation: Presentation? = null
-    private var windowId = 0
+    private var windowId = NO_WINDOW
     private val ready = CompletableDeferred<Boolean>()
 
     /** Set when the surface dies while a table runs. The swapchain then points at a dead surface, so the table must stop. */
@@ -34,7 +35,7 @@ class SecondScreenPresenter(private val context: Context) {
 
     fun start() {
         windowId = selectWindowId()
-        if (windowId == 0) {
+        if (windowId == NO_WINDOW) {
             ready.complete(false)
             return
         }
@@ -54,7 +55,7 @@ class SecondScreenPresenter(private val context: Context) {
     fun stop() {
         presentation?.dismiss()
         presentation = null
-        if (windowId != 0) {
+        if (windowId != NO_WINDOW) {
             VPinballManager.vpinballJNI.VPinballSetExternalSurface(windowId, null, 0, 0, 0f)
         }
     }
@@ -62,9 +63,10 @@ class SecondScreenPresenter(private val context: Context) {
     private fun selectWindowId(): Int {
         val jni = VPinballManager.vpinballJNI
         return when {
+            jni.VPinballLoadValueBool("Player", "SpanPlayfield", false) -> WINDOW_SPAN
             jni.VPinballLoadValueInt("Backglass", "BackglassOutput", 0) == OUTPUT_FLOATING -> WINDOW_BACKGLASS
             jni.VPinballLoadValueInt("ScoreView", "ScoreViewOutput", 0) == OUTPUT_FLOATING -> WINDOW_SCOREVIEW
-            else -> 0
+            else -> NO_WINDOW
         }
     }
 
@@ -102,7 +104,9 @@ class SecondScreenPresenter(private val context: Context) {
     }
 
     companion object {
+        private const val NO_WINDOW = -1
         private const val OUTPUT_FLOATING = 1 // RenderOutput::OM_WINDOW
+        private const val WINDOW_SPAN = 0 // Span slot: lower part of a spanned playfield
         private const val WINDOW_BACKGLASS = 1 // VPXWINDOW_Backglass
         private const val WINDOW_SCOREVIEW = 2 // VPXWINDOW_ScoreView
     }

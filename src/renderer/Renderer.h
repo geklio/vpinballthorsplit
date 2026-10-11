@@ -11,13 +11,14 @@
 #include "plugins/ControllerPlugin.h"
 #include "parts/PartGroup.h"
 #include "renderer/RenderProbe.h"
+#include "renderer/SpanLayout.h"
 
 class Renderable;
 class PinTable;
 class Renderer final
 {
 public:
-   Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D);
+   Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D, VPX::Window* spanWnd = nullptr);
    ~Renderer();
 
    void GetRenderSize(int& w, int& h) const { w = m_renderWidth; h = m_renderHeight; }
@@ -28,6 +29,11 @@ public:
    int GetDisplayWidth() const; // Playfield display width, taking in consideration stretching applied by some stereo modes
    int GetDisplayHeight() const; // Playfield display width, taking in consideration stretching applied by some stereo modes
    float GetDisplayAspectRatio() const;
+
+   // Spanned playfield (see SpanLayout.h): the scene is rendered on a tall canvas, then sliced to the main display and to spanWnd
+   bool IsSpanActive() const { return m_spanRT != nullptr; }
+   const SpanLayout& GetSpanLayout() const { return m_spanLayout; }
+   RenderTarget* GetFinalRT() const { return m_spanRT ? m_spanRT : m_renderDevice->GetOutputBackBuffer(); } // Target of the last postprocess pass
    void InitLayout(const float xpixoff = 0.f, const float ypixoff = 0.f); // Reset both the base and the current MVP to the default view setup, with an optional pixel offset for AA
    void SetFlip(ModelViewProj::FlipMode flipMode); // Flip the rendered image horizontally and/or vertically (e.g. for rear projection setups), applied to base MVP
    void SetViewProj(const Matrix3D& view, const Matrix3D& proj); // Override the MVP, applied to the base MVP
@@ -276,6 +282,11 @@ private:
    void SetupShaders();
 
    int m_renderWidth, m_renderHeight; // Render size without supersampling (AAFactor) applied (depends on output VR/Display and stereo mode)
+
+   VPX::Window* m_spanWnd = nullptr; // Lower display of a spanned playfield (not owned)
+   SpanLayout m_spanLayout;
+   RenderTarget* m_spanRT = nullptr; // Tall canvas the postprocess chain ends on when spanning
+   void ApplySpan(RenderTarget* canvasRT);
 
    RenderTarget* m_pOffscreenMSAABackBufferTexture = nullptr;
    RenderTarget* GetMSAABackBufferTexture() const { return m_pOffscreenMSAABackBufferTexture ? m_pOffscreenMSAABackBufferTexture : m_pOffscreenBackBufferTexture1; } // Main render target, may be MSAA enabled and not suited for sampling, also may have stereo output (2 layers)

@@ -80,7 +80,8 @@ static ExternalSurface s_externalSurfaces[VPXWindowId::VPXWINDOW_Topper + 1];
 
 void Window::SetExternalSurface(VPXWindowId windowId, void* nativeWindow, int pixelWidth, int pixelHeight, float refreshRate)
 {
-   if (windowId <= VPXWindowId::VPXWINDOW_Playfield || windowId > VPXWindowId::VPXWINDOW_Topper)
+   // Slot VPXWINDOW_Playfield is the span slot: the lower part of a playfield spanned over two displays
+   if (windowId < VPXWindowId::VPXWINDOW_Playfield || windowId > VPXWindowId::VPXWINDOW_Topper)
       return;
    std::lock_guard lock(s_externalSurfaceMutex);
    s_externalSurfaces[windowId] = { nativeWindow, pixelWidth, pixelHeight, refreshRate > 0.f ? refreshRate : 60.f };
@@ -113,6 +114,18 @@ Window::Window(VPXWindowId windowId, void* externalNativeWindow, const int pixel
    m_bitdepth = 32;
    m_isPositioningSupported = false;
    PLOGI << std::format("Window #{} ({}x{}) was attached to an external surface", (int)m_windowId, m_pixelWidth, m_pixelHeight);
+}
+
+Window* Window::CreateSpanWindow()
+{
+   ExternalSurface surface;
+   {
+      std::lock_guard lock(s_externalSurfaceMutex);
+      surface = s_externalSurfaces[VPXWindowId::VPXWINDOW_Playfield];
+   }
+   if (surface.nwh == nullptr)
+      return nullptr;
+   return new Window(VPXWindowId::VPXWINDOW_Playfield, surface.nwh, surface.width, surface.height, surface.refreshRate);
 }
 
 const char* Window::GetTitle() const

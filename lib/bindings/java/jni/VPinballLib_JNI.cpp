@@ -203,14 +203,14 @@ static void ZipProgressCallbackHandler(int current, int total, const char* filen
       env->DeleteLocalRef(filenameStr);
 }
 
-// Hand over (or withdraw, with a null surface) the native surface of a secondary display
-// for an ancillary window (1 = Backglass, 2 = ScoreView, 3 = Topper). Must be called before
-// VPinballPlay so the player creates the ancillary window on it.
+// Hand over (or withdraw, with a null surface) the native surface of a secondary display.
+// windowId: 0 = lower part of a spanned playfield, 1 = Backglass, 2 = ScoreView, 3 = Topper.
+// Must be called before VPinballPlay so the player binds the surface at startup.
 static ANativeWindow* gExternalSurfaces[4] = {};
 
 JNIEXPORT void JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetExternalSurface(JNIEnv* env, jobject obj, jint windowId, jobject surface, jint width, jint height, jfloat refreshRate)
 {
-   if (windowId < 1 || windowId > 3)
+   if (windowId < 0 || windowId > 3)
       return;
    ANativeWindow* nativeWindow = surface ? ANativeWindow_fromSurface(env, surface) : nullptr; // Acquires a reference
    VPX::Window::SetExternalSurface(static_cast<VPXWindowId>(windowId), nativeWindow, width, height, refreshRate);

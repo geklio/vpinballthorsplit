@@ -62,6 +62,7 @@ public:
    // surface is handed over here before the player starts.
    static void SetExternalSurface(VPXWindowId windowId, void* nativeWindow, int pixelWidth, int pixelHeight, float refreshRate);
    static bool HasExternalSurface(VPXWindowId windowId);
+   static Window* CreateSpanWindow(); // Window on the span surface (lower part of a spanned playfield), or nullptr if none was handed over
    bool IsExternal() const { return m_externalNwh != nullptr; }
    void* GetExternalNativeWindow() const { return m_externalNwh; }
    const char* GetTitle() const;

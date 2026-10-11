@@ -295,6 +295,19 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
                m_maxFramerate = pfRefreshRate / divider;
             }
          }
+         // Spanned playfield (Android secondary display): both displays must show the same frame, so run at the slower display rate.
+         // Otherwise a ball crossing from one display to the other would visibly stutter at the seam.
+         if (g_isAndroid && stereo3D == STEREO_OFF && m_ptable->GetSettings().GetPlayer_SpanPlayfield())
+         {
+            m_spanWnd = VPX::Window::CreateSpanWindow();
+            if (m_spanWnd == nullptr)
+               PLOGW << "Spanned playfield is enabled but no secondary display surface is available, rendering on the main display only";
+            else if (m_spanWnd->GetRefreshRate() < m_maxFramerate)
+            {
+               m_maxFramerate = max(24.f, m_spanWnd->GetRefreshRate());
+               PLOGI << "Spanned playfield: limiting framerate to the secondary display refresh rate (" << m_maxFramerate << " FPS)";
+            }
+         }
          assert(24.f <= m_maxFramerate && m_maxFramerate <= 10000.f); // We guarantee a target framerate from 24 FPS to unbound, expressed as 10000 FPS
          PLOGI << "Synchronization mode: " << m_videoSyncMode << " with maximum FPS: " << m_maxFramerate << ", display FPS: " << pfRefreshRate;
       }
@@ -317,7 +330,7 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    try
    {
-      m_renderer = std::make_unique<Renderer>(m_ptable, m_playfieldWnd, m_videoSyncMode, stereo3D);
+      m_renderer = std::make_unique<Renderer>(m_ptable, m_playfieldWnd, m_videoSyncMode, stereo3D, m_spanWnd);
    }
    catch (HRESULT hr)
    {
@@ -329,6 +342,14 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    m_scoreViewOutput.SetMode(m_ptable->GetSettings(), static_cast<RenderOutput::OutputMode>(m_ptable->GetSettings().GetWindow_Mode(VPXWindowId::VPXWINDOW_ScoreView)));
    m_topperOutput.SetMode(m_ptable->GetSettings(), static_cast<RenderOutput::OutputMode>(m_ptable->GetSettings().GetWindow_Mode(VPXWindowId::VPXWINDOW_Topper)));
    #if defined(ENABLE_BGFX)
+   // Spanned playfield: the lower display gets its own swapchain. If the renderer did not accept the span layout, drop the window
+   if (m_spanWnd && m_renderer->IsSpanActive())
+      m_renderer->m_renderDevice->AddWindow(m_spanWnd);
+   else if (m_spanWnd)
+   {
+      delete m_spanWnd;
+      m_spanWnd = nullptr;
+   }
    // Ancillary windows are created hidden and only shown when rendering them (in VR mode, they are only rendered when the desktop display shows the other displays)
    if (m_backglassOutput.GetMode() == VPX::RenderOutput::OM_WINDOW)
       m_renderer->m_renderDevice->AddWindow(m_backglassOutput.GetWindow());
@@ -1465,6 +1486,8 @@ Player::~Player()
    LockForegroundWindow(false);
    delete m_playfieldWnd;
    m_playfieldWnd = nullptr;
+   delete m_spanWnd; // Its backbuffer was released with the render device
+   m_spanWnd = nullptr;
 
    delete m_vrDevice;
    m_vrDevice = nullptr;
