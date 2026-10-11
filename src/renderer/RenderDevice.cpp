@@ -209,10 +209,11 @@ void RenderDevice::OnScreenshotCaptured(const char* _filePath, uint32_t _width, 
 bgfx::TextureFormat::Enum RenderDevice::SelectBackBufferFormat(const VPX::Window* wnd, bgfx::TextureFormat::Enum defaultFormat, bool allowHDR10) const
 {
    // If we already have a backbuffer on this display, use the same format (it seems to cause issues on Linux otherwise, and the selection process should lead to the same result anyway)
-   SDL_DisplayID displayId = SDL_GetDisplayForWindow(wnd->GetCore());
+   // External surfaces (Android secondary display) are not SDL windows: they have no SDL display, so skip format sharing
+   SDL_DisplayID displayId = wnd->IsExternal() ? 0 : SDL_GetDisplayForWindow(wnd->GetCore());
    for (const VPX::Window* existingWnd : m_outputWnd)
    {
-      if (existingWnd == nullptr || existingWnd == wnd || existingWnd->GetBackBuffer() == nullptr)
+      if (displayId == 0 || existingWnd == nullptr || existingWnd == wnd || existingWnd->GetBackBuffer() == nullptr || existingWnd->IsExternal())
          continue;
       if (SDL_DisplayID existingDisplayId = SDL_GetDisplayForWindow(existingWnd->GetCore()); existingDisplayId == displayId)
       {
@@ -256,7 +257,7 @@ bgfx::TextureFormat::Enum RenderDevice::SelectBackBufferFormat(const VPX::Window
       }
       else
       {
-         PLOGE << "SDL failed to gather the screen back buffer format, defaulting to RGBA8 for " << SDL_GetWindowTitle(wnd->GetCore());
+         PLOGE << "SDL failed to gather the screen back buffer format, defaulting to RGBA8 for " << wnd->GetTitle();
          defaultFormat = bgfx::TextureFormat::RGBA8;
       }
    }
@@ -299,7 +300,7 @@ bgfx::TextureFormat::Enum RenderDevice::SelectBackBufferFormat(const VPX::Window
    if (colorSelect == INT_MIN)
    {
       // Linux/Vulkan does not report backbuffer caps in headless mode, Still BGRA8 seems to be supported everywhere, so this is not fully clean but ok
-      PLOGE << "Driver did not report any supported backbuffer format for " << SDL_GetWindowTitle(wnd->GetCore()) << ". Defaulting to BGRA8";
+      PLOGE << "Driver did not report any supported backbuffer format for " << wnd->GetTitle() << ". Defaulting to BGRA8";
       selectedFormat = bgfx::TextureFormat::BGRA8;
    }
 
@@ -2067,7 +2068,7 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
    bgfx::TextureFormat::Enum bgfxFormat = SelectBackBufferFormat(wnd, bgfx::TextureFormat::Count, false);
    const bool wcgBackBuffer = bgfxFormat == bgfx::TextureFormat::RGB10A2;
    colorFormat vpxFormat = BGFXtoVPXTextureFormat(bgfxFormat);
-   PLOGD << "Creating BGFX swap chain for window " << SDL_GetWindowTitle(wnd->GetCore()) << " (" << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight() << " "
+   PLOGD << "Creating BGFX swap chain for window " << wnd->GetTitle() << " (" << wnd->GetPixelWidth() << 'x' << wnd->GetPixelHeight() << " "
          << bimg::getName(bimg::TextureFormat::Enum(bgfxFormat)) << ')';
    SDL_Window* sdlWnd = wnd->GetCore();
    void* nwh;
@@ -2089,7 +2090,7 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
 #elif BX_PLATFORM_IOS
    nwh = VPinballLib::VPinballLib::Instance().GetMetalLayer();
 #elif BX_PLATFORM_ANDROID
-   nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+   nwh = wnd->IsExternal() ? wnd->GetExternalNativeWindow() : SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWnd), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
 #elif BX_PLATFORM_WINDOWS
    nwh = wnd->GetNativeHWND();
 #elif BX_PLATFORM_STEAMLINK
@@ -2109,7 +2110,7 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
    // Ancillary windows compose directly in sRGB (see Renderer::RenderAncillaryWindow), which only suits an sRGB backbuffer
    // FIXME Correcting it needs the per window tonemapping pass, still disabled
    if (wcgBackBuffer) {
-      PLOGW << "Window " << SDL_GetWindowTitle(wnd->GetCore()) << " shares an HDR10 display with the playfield window, its content may be too bright";
+      PLOGW << "Window " << wnd->GetTitle() << " shares an HDR10 display with the playfield window, its content may be too bright";
    }
 #endif
 }

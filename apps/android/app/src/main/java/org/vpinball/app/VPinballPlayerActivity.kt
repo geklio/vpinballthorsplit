@@ -25,6 +25,7 @@ class VPinballPlayerActivity : SDLActivity(), LifecycleOwner, SavedStateRegistry
     private val lifecycleRegistry = LifecycleRegistry(this)
     private var loadingOverlay: ComposeView? = null
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private var secondScreen: SecondScreenPresenter? = null
 
     override val lifecycle: Lifecycle
         get() = lifecycleRegistry
@@ -63,8 +64,22 @@ class VPinballPlayerActivity : SDLActivity(), LifecycleOwner, SavedStateRegistry
         addContentView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         loadingOverlay = overlay
 
+        // Open the secondary display (if configured) before the player starts, so the native side can bind its surface
+        if (!BuildConfig.IS_QUEST) {
+            secondScreen =
+                SecondScreenPresenter(this).also { presenter ->
+                    presenter.onSurfaceLost = {
+                        // The native swapchain cannot outlive its surface: stop the table rather than crash
+                        VPinballManager.stop()
+                        finish()
+                    }
+                    presenter.start()
+                }
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
             delay(2000)
+            secondScreen?.awaitReady()
             VPinballManager.startPlayer()
         }
     }
@@ -110,6 +125,9 @@ class VPinballPlayerActivity : SDLActivity(), LifecycleOwner, SavedStateRegistry
     }
 
     override fun onDestroy() {
+        secondScreen?.onSurfaceLost = null
+        secondScreen?.stop()
+        secondScreen = null
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         VPinballManager.setPlayerActivity(null)
         super.onDestroy()

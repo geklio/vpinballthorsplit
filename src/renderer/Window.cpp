@@ -9,6 +9,8 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <mutex>
+
 #ifdef _MSC_VER
 #include <dxgi1_2.h>
 #pragma comment(lib, "dxgi.lib")
@@ -64,6 +66,63 @@ Window::Window(const int width, const int height)
    m_wcgDisplay = false;
    m_wcgBackbuffer = false;
    m_backBuffer = nullptr;
+}
+
+struct ExternalSurface
+{
+   void* nwh = nullptr;
+   int width = 0;
+   int height = 0;
+   float refreshRate = 60.f;
+};
+static std::mutex s_externalSurfaceMutex;
+static ExternalSurface s_externalSurfaces[VPXWindowId::VPXWINDOW_Topper + 1];
+
+void Window::SetExternalSurface(VPXWindowId windowId, void* nativeWindow, int pixelWidth, int pixelHeight, float refreshRate)
+{
+   if (windowId <= VPXWindowId::VPXWINDOW_Playfield || windowId > VPXWindowId::VPXWINDOW_Topper)
+      return;
+   std::lock_guard lock(s_externalSurfaceMutex);
+   s_externalSurfaces[windowId] = { nativeWindow, pixelWidth, pixelHeight, refreshRate > 0.f ? refreshRate : 60.f };
+   PLOGI << std::format("External surface for window #{} set to {} ({}x{} {}Hz)", (int)windowId, nativeWindow, pixelWidth, pixelHeight, refreshRate);
+}
+
+bool Window::HasExternalSurface(VPXWindowId windowId)
+{
+   if (windowId <= VPXWindowId::VPXWINDOW_Playfield || windowId > VPXWindowId::VPXWINDOW_Topper)
+      return false;
+   std::lock_guard lock(s_externalSurfaceMutex);
+   return s_externalSurfaces[windowId].nwh != nullptr;
+}
+
+Window::Window(VPXWindowId windowId, void* externalNativeWindow, const int pixelWidth, const int pixelHeight, const float refreshRate)
+   : m_windowId(windowId)
+   , m_isVR(false)
+{
+   assert(externalNativeWindow != nullptr);
+   m_externalNwh = externalNativeWindow;
+   m_width = pixelWidth;
+   m_height = pixelHeight;
+   m_pixelWidth = pixelWidth;
+   m_pixelHeight = pixelHeight;
+   m_pixelDensity = 1.f;
+   m_screenwidth = pixelWidth;
+   m_screenheight = pixelHeight;
+   m_windowMode = WindowMode::BorderlessFullscreen;
+   m_refreshrate = refreshRate;
+   m_bitdepth = 32;
+   m_isPositioningSupported = false;
+   PLOGI << std::format("Window #{} ({}x{}) was attached to an external surface", (int)m_windowId, m_pixelWidth, m_pixelHeight);
+}
+
+const char* Window::GetTitle() const
+{
+   if (m_externalNwh)
+      return "External Surface";
+   if (m_nwnd == nullptr)
+      return "VR";
+   const char* title = SDL_GetWindowTitle(m_nwnd);
+   return title ? title : "";
 }
 
 Window::Window(const string& title, const Settings& settings, VPXWindowId windowId)
@@ -307,13 +366,13 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
 
 Window::~Window()
 {
-   if (!m_isVR && !(g_isMobile && g_isIOS))
+   if (!NoSDL() && !(g_isMobile && g_isIOS))
       SDL_RunOnMainThread([](void* userdata) { SDL_DestroyWindow(static_cast<SDL_Window*>(userdata)); }, m_nwnd, true);
 }
 
 void Window::Show(const bool show)
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    if (show)
       SDL_ShowWindow(m_nwnd);
@@ -323,14 +382,14 @@ void Window::Show(const bool show)
 
 bool Window::IsVisible() const
 {
-   if (m_isVR)
+   if (NoSDL())
       return true;
    return (SDL_GetWindowFlags(m_nwnd) & SDL_WINDOW_HIDDEN) == 0;
 }
 
 void Window::RaiseAndFocus()
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    SDL_RaiseWindow(m_nwnd);
    if (m_windowMode != WindowMode::Windowed) // When window loose focus, it may loose its fullscreen state, so restore it
@@ -338,21 +397,21 @@ void Window::RaiseAndFocus()
 }
 
 bool Window::IsFocused() const {
-   if (m_isVR)
+   if (NoSDL())
       return true;
    return m_nwnd == SDL_GetKeyboardFocus();
 }
 
 void Window::SetFocusable(const bool focusable)
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    SDL_SetWindowFocusable(m_nwnd, focusable);
 }
  
 void Window::GetPos(int& x, int& y)const
 {
-   if (m_isVR)
+   if (NoSDL())
    {
       x = 0;
       y = 0;
@@ -370,7 +429,7 @@ void Window::GetPixelPos(int& x, int& y) const
 
 void Window::SetPos(const int x, const int y)
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    SDL_SetWindowPosition(m_nwnd, x, y);
 }
@@ -379,7 +438,7 @@ void Window::SetPixelPos(const int x, const int y) { SetPos(PixelToLogical(x), P
 
 void Window::SetSize(const int x, const int y)
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    if (x == GetWidth() && y == GetHeight())
       return;
@@ -390,7 +449,7 @@ void Window::SetPixelSize(const int w, const int h) { SetSize(PixelToLogical(w),
 
 void Window::OnResized()
 {
-   if (m_isVR)
+   if (NoSDL())
       return;
    SDL_GetWindowSize(m_nwnd, &m_width, &m_height);
    SDL_GetWindowSizeInPixels(m_nwnd, &m_pixelWidth, &m_pixelHeight);
@@ -490,8 +549,17 @@ RenderOutput::OutputMode RenderOutput::GetMode() const { return m_mode; }
 
 void RenderOutput::SetMode(const Settings& settings, OutputMode mode)
 {
+   // Android ancillary windows may be given an external surface (secondary display). Read it once, so the
+   // single view decision and the window creation below agree even if the surface changes concurrently.
+   ExternalSurface surface;
+   if (g_isAndroid && m_windowId > VPXWindowId::VPXWINDOW_Playfield && m_windowId <= VPXWindowId::VPXWINDOW_Topper)
+   {
+      std::lock_guard lock(s_externalSurfaceMutex);
+      surface = s_externalSurfaces[m_windowId];
+   }
 #ifdef ENABLE_BGFX
-   constexpr bool isSingleView = g_isMobile;
+   // Mobile is single view, except for Android ancillary windows that have an external surface
+   const bool isSingleView = g_isMobile && surface.nwh == nullptr;
 #else
    constexpr bool isSingleView = true;
 #endif
@@ -524,6 +592,8 @@ void RenderOutput::SetMode(const Settings& settings, OutputMode mode)
 
    case OM_WINDOW:
       m_embeddedWindow = nullptr;
+      if (m_mode == OM_WINDOW && m_window == nullptr && surface.nwh != nullptr)
+         m_window = std::make_unique<Window>(m_windowId, surface.nwh, surface.width, surface.height, surface.refreshRate);
       if (m_mode == OM_WINDOW && m_window == nullptr)
       {
          m_window = std::make_unique<Window>(m_windowId == VPXWindowId::VPXWINDOW_Playfield ? "Visual Pinball Player"s

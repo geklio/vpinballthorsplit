@@ -19,6 +19,7 @@ public class VPinballJNI {
     public native int VPinballPlay(String path);
     public native void VPinballStop();
     public native boolean VPinballInitOpenXR(Object activity);
+    public native void VPinballSetExternalSurface(int windowId, Object surface, int width, int height, float refreshRate);
     public native int VPinballZipCreate(String sourcePath, String destPath, VPinballZipCallback callback);
     public native int VPinballZipExtract(String sourcePath, String destPath, VPinballZipCallback callback);
 }

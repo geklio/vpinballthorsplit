@@ -54,7 +54,17 @@ class Window final
 public:
    Window(const string& title, const Settings& settings, VPXWindowId windowId); // OS Window
    Window(const int width, const int height); // VR Output
+   Window(VPXWindowId windowId, void* externalNativeWindow, const int pixelWidth, const int pixelHeight, const float refreshRate); // Externally owned surface (Android secondary display)
    ~Window();
+
+   // Externally owned native surfaces, one per window id. On Android, SDL only supports a single window,
+   // so secondary displays (e.g. the AYN Thor bottom screen) are driven through a Java Presentation whose
+   // surface is handed over here before the player starts.
+   static void SetExternalSurface(VPXWindowId windowId, void* nativeWindow, int pixelWidth, int pixelHeight, float refreshRate);
+   static bool HasExternalSurface(VPXWindowId windowId);
+   bool IsExternal() const { return m_externalNwh != nullptr; }
+   void* GetExternalNativeWindow() const { return m_externalNwh; }
+   const char* GetTitle() const;
 
    enum WindowMode
    {
@@ -155,6 +165,8 @@ private:
    class RenderTarget* m_backBuffer = nullptr;
 
    SDL_Window* m_nwnd = nullptr;
+   void* m_externalNwh = nullptr; // When set, the window is not an SDL window but an externally owned native surface
+   bool NoSDL() const { return m_isVR || m_externalNwh != nullptr; }
 };
 
 class RenderOutput final

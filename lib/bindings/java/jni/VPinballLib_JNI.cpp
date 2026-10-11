@@ -7,6 +7,9 @@
 
 #include <SDL3/SDL_system.h>
 #include <jni.h>
+#include <android/native_window_jni.h>
+
+#include "renderer/Window.h"
 
 #ifdef ENABLE_XR
 #define XR_USE_PLATFORM_ANDROID
@@ -198,6 +201,22 @@ static void ZipProgressCallbackHandler(int current, int total, const char* filen
 
    if (filenameStr)
       env->DeleteLocalRef(filenameStr);
+}
+
+// Hand over (or withdraw, with a null surface) the native surface of a secondary display
+// for an ancillary window (1 = Backglass, 2 = ScoreView, 3 = Topper). Must be called before
+// VPinballPlay so the player creates the ancillary window on it.
+static ANativeWindow* gExternalSurfaces[4] = {};
+
+JNIEXPORT void JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetExternalSurface(JNIEnv* env, jobject obj, jint windowId, jobject surface, jint width, jint height, jfloat refreshRate)
+{
+   if (windowId < 1 || windowId > 3)
+      return;
+   ANativeWindow* nativeWindow = surface ? ANativeWindow_fromSurface(env, surface) : nullptr; // Acquires a reference
+   VPX::Window::SetExternalSurface(static_cast<VPXWindowId>(windowId), nativeWindow, width, height, refreshRate);
+   if (gExternalSurfaces[windowId])
+      ANativeWindow_release(gExternalSurfaces[windowId]);
+   gExternalSurfaces[windowId] = nativeWindow;
 }
 
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballZipCreate(JNIEnv* env, jobject obj, jstring sourcePath, jstring destPath, jobject callback)
