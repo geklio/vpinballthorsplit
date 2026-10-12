@@ -88,7 +88,16 @@ jobs:
     steps:
       - id: matrix
         run: |
-          if [[ "${{ needs.context.outputs.is_pr }}" != "true" ]]; then
+          if [[ "${{ github.repository }}" != "vpinball/vpinball" ]]; then
+            # Thor fork: only build what the dual-screen work needs (Android app + two desktop compile checks)
+            DESKTOP='{"include":[
+              {"os":"windows-2025-vs2026","type":"BGFX","platform":"windows","arch":"x64","config":"Release"},
+              {"os":"ubuntu-24.04","type":"BGFX","platform":"linux","arch":"x64","config":"Release"}
+            ]}'
+            SBC='{"include":[]}'
+            DX='{"include":[]}'
+            ANDROID_FLAVORS='["mobile"]'
+          elif [[ "${{ needs.context.outputs.is_pr }}" != "true" ]]; then
             DESKTOP='{"include":[
               {"os":"windows-2025-vs2026","type":"BGFX","platform":"windows","arch":"x64","config":"Release"},
               {"os":"windows-2025-vs2026","type":"BGFX","platform":"windows","arch":"x86","config":"Release"},
@@ -318,6 +327,7 @@ jobs:
           archive: false
 
   build-dx:
+    if: github.repository == 'vpinball/vpinball'
     name: Build VPinballX-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.config }}
     runs-on: windows-2025-vs2026
     needs: [ context, version, matrix ]
@@ -402,6 +412,7 @@ jobs:
           archive: false
 
   build-sbc:
+    if: github.repository == 'vpinball/vpinball'
     name: Build VPinballX_${{ matrix.type }}-${{ matrix.board }}-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.config }}
     runs-on: ${{ matrix.os }}
     needs: [ context, version, matrix ]
@@ -477,6 +488,7 @@ jobs:
           archive: false
 
   build-ios:
+    if: github.repository == 'vpinball/vpinball'
     name: Build VPinballX_BGFX-ios-${{ matrix.config }}
     runs-on: macos-26
     needs: [ context, version ]
