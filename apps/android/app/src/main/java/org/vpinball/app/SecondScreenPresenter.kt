@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import org.vpinball.app.jni.VPinballLogLevel
 
 /**
  * Drives a secondary display (e.g. the AYN Thor bottom screen) from the VPX player.
