@@ -662,11 +662,16 @@ jobs:
                 -dname "CN=VPinball Android, O=VPinball, C=XX"
           FLAVOR="${{ matrix.flavor }}"
           FLAVOR_CAPITALIZED="$(echo "${FLAVOR:0:1}" | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
+          set -o pipefail
+          # Surface Gradle/Kotlin errors as a job annotation, so they can be read without the raw log
           ./gradlew \
             assemble${FLAVOR_CAPITALIZED}${{ matrix.config }} \
-            bundle${FLAVOR_CAPITALIZED}${{ matrix.config }} \
             -PversionName="${{ needs.version.outputs.version_full }}" \
-            -Psha_short="${{ needs.version.outputs.sha_short }}"
+            -Psha_short="${{ needs.version.outputs.sha_short }}" 2>&1 | tee gradle.log || {
+            ERRORS=$(grep -E "^e: |error:|What went wrong|> Task .* FAILED|Caused by" -A4 gradle.log | head -80 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Gradle build failed::${ERRORS}"
+            exit 1
+          }
       - name: Stage apk/aab artifacts
         run: |
           CONFIG_LC=$(echo "${{ matrix.config }}" | tr '[:upper:]' '[:lower:]')
